@@ -5,72 +5,105 @@ using System.Linq;
 
 public class ExtractWindowsByMaterial : EditorWindow
 {
+    // --- Material picker popup ---
+    private static string[] _materialNames;
+    private static int _selectedIndex = 0;
+    private static System.Action<int> _onConfirm;
+
     [MenuItem("Tools/Extract Windows By Material")]
     static void Extract()
     {
         GameObject selected = Selection.activeGameObject;
         if (selected == null || selected.GetComponent<MeshFilter>() == null)
         {
-            Debug.LogError("Select a GameObject with MeshFilter.");
+            Debug.LogError("Select a GameObject with a MeshFilter.");
             return;
         }
 
+        MeshRenderer mr = selected.GetComponent<MeshRenderer>();
+        if (mr == null || mr.sharedMaterials.Length == 0)
+        {
+            Debug.LogError("Selected object has no MeshRenderer or materials.");
+            return;
+        }
+
+        _materialNames = mr.sharedMaterials.Select((m, i) => $"{i}: {(m != null ? m.name : "null")}").ToArray();
+        _selectedIndex = 0;
+
+        _onConfirm = (chosenIndex) =>
+        {
+            RunExtraction(selected, chosenIndex);
+        };
+
+        ExtractWindowsByMaterial window = GetWindow<ExtractWindowsByMaterial>("Select Window Material");
+        window.minSize = new Vector2(300, 120);
+        window.ShowUtility();
+    }
+
+    void OnGUI()
+    {
+        EditorGUILayout.LabelField("Which material is used for the windows?", EditorStyles.wordWrappedLabel);
+        EditorGUILayout.Space();
+
+        _selectedIndex = EditorGUILayout.Popup("Window Material", _selectedIndex, _materialNames);
+
+        EditorGUILayout.Space();
+        EditorGUILayout.BeginHorizontal();
+
+        if (GUILayout.Button("Extract"))
+        {
+            int chosen = _selectedIndex;
+            Close();
+            _onConfirm?.Invoke(chosen);
+        }
+
+        if (GUILayout.Button("Cancel"))
+        {
+            Close();
+        }
+
+        EditorGUILayout.EndHorizontal();
+    }
+
+    static void RunExtraction(GameObject selected, int windowMatIndex)
+    {
         MeshFilter mf = selected.GetComponent<MeshFilter>();
         MeshRenderer mr = selected.GetComponent<MeshRenderer>();
         Mesh mesh = mf.sharedMesh;
 
-        // Ask user which material index is the window material
-        string[] materialNames = mr.sharedMaterials.Select(m => m.name).ToArray();
-        int windowMatIndex = EditorUtility.DisplayDialogComplex(
-            "Select Window Material",
-            "Which material is used for the windows?",
-            materialNames[0], materialNames.Length > 1 ? materialNames[1] : null, "Cancel"
-        );
-
-        if (windowMatIndex == 1 && materialNames.Length > 1) windowMatIndex = 1;
-        else if (windowMatIndex == 2) return;
-
-        // Get all triangles of the window submesh
         int[] windowTriangles = mesh.GetTriangles(windowMatIndex);
         if (windowTriangles.Length == 0)
         {
-            Debug.LogError("No triangles found for selected material.");
+            Debug.LogError($"No triangles found for material index {windowMatIndex}.");
             return;
         }
 
-        // Build adjacency for these triangles only
         Vector3[] verts = mesh.vertices;
         List<HashSet<int>> adjacency = BuildAdjacency(windowTriangles, verts);
-
-        // Find connected components (islands)
         List<List<int>> islands = FindConnectedComponents(adjacency);
 
-        Debug.Log($"Found {islands.Count} window islands.");
+        Debug.Log($"Found {islands.Count} window island(s).");
 
-        // Create parent
         Transform parent = new GameObject(selected.name + "_Windows").transform;
         parent.SetParent(selected.transform);
         parent.localPosition = Vector3.zero;
 
         Material windowMat = mr.sharedMaterials[windowMatIndex];
 
-        // Create one GameObject per island
         for (int i = 0; i < islands.Count; i++)
         {
             Mesh islandMesh = ExtractMeshFromTriangles(windowTriangles, islands[i], verts, mesh);
+
             GameObject windowObj = new GameObject($"Window_{i}");
             windowObj.transform.SetParent(parent);
             windowObj.transform.localPosition = Vector3.zero;
             windowObj.AddComponent<MeshFilter>().sharedMesh = islandMesh;
             windowObj.AddComponent<MeshRenderer>().sharedMaterial = windowMat;
 
-            // Add your break script here
             // windowObj.AddComponent<BreakWindow>();
         }
 
-        // Optional: hide original windows by disabling the material or renderer
-        // mr.sharedMaterials[windowMatIndex] = null; // careful with this
-        Debug.Log("Done.");
+        Debug.Log("Extraction complete.");
     }
 
     static List<HashSet<int>> BuildAdjacency(int[] tris, Vector3[] verts)
@@ -79,7 +112,6 @@ public class ExtractWindowsByMaterial : EditorWindow
         List<HashSet<int>> adj = new List<HashSet<int>>();
         for (int i = 0; i < triCount; i++) adj.Add(new HashSet<int>());
 
-        // Map each vertex to triangles that use it
         Dictionary<int, List<int>> vertexToTriangles = new Dictionary<int, List<int>>();
         for (int t = 0; t < triCount; t++)
         {
@@ -92,14 +124,12 @@ public class ExtractWindowsByMaterial : EditorWindow
             }
         }
 
-        // Two triangles are adjacent if they share an edge (2 common vertices)
         for (int t = 0; t < triCount; t++)
         {
             int v0 = tris[t * 3 + 0];
             int v1 = tris[t * 3 + 1];
             int v2 = tris[t * 3 + 2];
 
-            // For each vertex, check triangles that share it and test edge sharing
             HashSet<int> candidates = new HashSet<int>();
             foreach (int v in new[] { v0, v1, v2 })
                 if (vertexToTriangles.ContainsKey(v))
@@ -173,7 +203,6 @@ public class ExtractWindowsByMaterial : EditorWindow
         newMesh.RecalculateNormals();
         newMesh.RecalculateBounds();
 
-        // Copy UVs if needed
         if (sourceMesh.uv.Length > 0)
         {
             Vector2[] newUVs = new Vector2[newVerts.Count];
