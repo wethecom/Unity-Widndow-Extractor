@@ -5,12 +5,10 @@ using System.Collections.Generic;
 public class ProceduralShatter : MonoBehaviour
 {
     [Header("Assets")]
-    [Tooltip("Drag your Glass Material here. If left empty, it will use the object's current material.")]
     public Material glassMaterial;
-    [Tooltip("Drag your Glass Break AudioClip here.")]
     public AudioClip breakSound;
-    [Range(0f, 1f)]
-    public float soundVolume = 1f;
+    [Range(0f, 1f)] public float soundVolume = 1f;
+    [Range(0f, 0.5f)] public float pitchRandomness = 0.1f; // Adds variety to the sound
 
     [Header("Fragment Settings")]
     public int fragmentCount = 30;          
@@ -20,7 +18,6 @@ public class ProceduralShatter : MonoBehaviour
     [Header("Physics")]
     public float explosiveForce = 15f;       
     public float durability = 2f;
-    [Tooltip("If true, the glass stays still until it breaks. If false, it will fall with gravity.")]
     public bool stayInPlace = true;
 
     [Header("Cleanup")]
@@ -36,7 +33,6 @@ public class ProceduralShatter : MonoBehaviour
     {
         AutomatePhysicsSetup();
         
-        // Fallback for material
         if (glassMaterial == null)
         {
             var rend = GetComponent<Renderer>();
@@ -46,30 +42,22 @@ public class ProceduralShatter : MonoBehaviour
 
     private void AutomatePhysicsSetup()
     {
-        // 1. Automate Rigidbody
+        // Automate Rigidbody
         Rigidbody rb = GetComponent<Rigidbody>();
-        if (rb == null)
-        {
-            rb = gameObject.AddComponent<Rigidbody>();
-            Debug.Log($"[Shatter] Added missing Rigidbody to {gameObject.name}");
-        }
+        if (rb == null) rb = gameObject.AddComponent<Rigidbody>();
         rb.isKinematic = stayInPlace;
         rb.useGravity = !stayInPlace;
 
-        // 2. Automate Collider
+        // Automate Collider
         if (GetComponent<Collider>() == null)
         {
-            // We add a BoxCollider as it's the most common for glass panes/windows
             BoxCollider boxCol = gameObject.AddComponent<BoxCollider>();
-            
-            // Try to size the collider to the mesh automatically
             MeshFilter mf = GetComponent<MeshFilter>();
             if (mf != null)
             {
                 boxCol.center = mf.sharedMesh.bounds.center;
                 boxCol.size = mf.sharedMesh.bounds.size;
             }
-            Debug.Log($"[Shatter] Added missing BoxCollider to {gameObject.name}");
         }
     }
 
@@ -92,29 +80,49 @@ public class ProceduralShatter : MonoBehaviour
         if (isBroken) return;
         isBroken = true;
 
-        // Hide original glass
+        // 1. Visuals
         var rend = GetComponent<Renderer>();
         if (rend != null) rend.enabled = false;
         
-        // Play Sound
-        if (breakSound != null)
-        {
-            AudioSource.PlayClipAtPoint(breakSound, transform.position, soundVolume);
-        }
+        // 2. Pro Audio Handling
+        PlayShatterSound();
 
-        // Play Particles
+        // 3. Particles
         if (breakParticles != null)
         {
             var ps = Instantiate(breakParticles, transform.position, Quaternion.identity);
             Destroy(ps.gameObject, ps.main.duration);
         }
 
-        // Clean up physics on original object so it doesn't block the shards
+        // 4. Clean up physics on original object
         Destroy(GetComponent<Collider>());
         Rigidbody rb = GetComponent<Rigidbody>();
         if (rb != null) Destroy(rb);
 
         StartCoroutine(SpawnShards(impactPoint));
+    }
+
+    private void PlayShatterSound()
+    {
+        if (breakSound == null) return;
+
+        // Create a dedicated sound object that survives the destruction of this glass
+        GameObject soundObj = new GameObject("ShatterSound_Temp");
+        soundObj.transform.position = transform.position;
+
+        AudioSource source = soundObj.AddComponent<AudioSource>();
+        source.clip = breakSound;
+        source.volume = soundVolume;
+        
+        // PITCH RANDOMIZATION: The "Secret Sauce"
+        // This makes every glass break sound slightly different
+        source.pitch = 1f + Random.Range(-pitchRandomness, pitchRandomness);
+        
+        source.spatialBlend = 1.0f; // Make it 3D sound
+        source.Play();
+
+        // Destroy the sound object only after the clip is finished
+        Destroy(soundObj, breakSound.length);
     }
 
     private IEnumerator SpawnShards(Vector3 impactPoint)
@@ -141,7 +149,6 @@ public class ProceduralShatter : MonoBehaviour
             sCol.sharedMesh = shardMesh;
             sCol.convex = true;
 
-            // Explosive "Pop" force
             Vector3 pushDir = (shard.transform.position - impactPoint).normalized;
             sRb.AddForce(pushDir * Random.Range(explosiveForce * 0.5f, explosiveForce), ForceMode.Impulse);
             sRb.AddTorque(Random.insideUnitSphere * explosiveForce, ForceMode.Impulse);
@@ -151,11 +158,7 @@ public class ProceduralShatter : MonoBehaviour
 
         yield return new WaitForSeconds(destroyFragmentsAfter);
 
-        foreach (var s in shards)
-        {
-            if (s != null) Destroy(s);
-        }
-
+        foreach (var s in shards) if (s != null) Destroy(s);
         Destroy(gameObject);
     }
 
